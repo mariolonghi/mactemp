@@ -25,6 +25,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hard requirements gate: without readable thermal sensors (Intel Macs
+        // never get this far — the binary is arm64-only — but virtual machines
+        // and future chips with renamed sensors can) the app is useless, so
+        // explain, undo any install side effects, and stop. Never register a
+        // login item for an app that can't work.
+        guard sensors != nil else {
+            LoginItem.setEnabled(false)
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "This Mac isn't supported"
+            alert.informativeText = """
+            MacTemp reads the thermal sensors of Apple Silicon Macs (M1 or \
+            later). This system doesn't expose them — Intel Macs and most \
+            virtual machines aren't supported.
+
+            MacTemp will now quit.
+            """
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
+
         LoginItem.applyAtStartup()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

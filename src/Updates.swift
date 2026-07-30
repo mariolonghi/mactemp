@@ -127,10 +127,15 @@ enum SelfUpdater {
 
     /// Download → verify → stage → spawn swap helper. Blocking; call from a
     /// background queue. On success the caller MUST terminate the app so the
-    /// helper can replace and relaunch it.
-    static func performUpdate(from dmgURL: URL) throws {
-        let (ok, why) = canSelfUpdate()
-        guard ok else { throw UpdateError.notPossible(why) }
+    /// helper can replace and relaunch it. `target`/`waitPID` default to the
+    /// running app; they're overridable for testing the flow from outside.
+    static func performUpdate(from dmgURL: URL,
+                              target explicitTarget: URL? = nil,
+                              waitPID explicitPID: Int32? = nil) throws {
+        if explicitTarget == nil {
+            let (ok, why) = canSelfUpdate()
+            guard ok else { throw UpdateError.notPossible(why) }
+        }
 
         try checkURL(dmgURL)
 
@@ -153,8 +158,8 @@ enum SelfUpdater {
                     orThrow: "couldn't stage the update")
 
             try spawnSwapHelper(staged: staged,
-                                target: URL(fileURLWithPath: AppInfo.bundlePath),
-                                waitPID: ProcessInfo.processInfo.processIdentifier,
+                                target: explicitTarget ?? URL(fileURLWithPath: AppInfo.bundlePath),
+                                waitPID: explicitPID ?? ProcessInfo.processInfo.processIdentifier,
                                 workdir: workdir)
         } catch {
             try? FileManager.default.removeItem(at: workdir)

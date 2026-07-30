@@ -37,6 +37,8 @@ mkdir -p "$APP/Contents/MacOS"
 
 echo "==> Building ${APP_NAME}.app — version ${VERSION}"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 xcrun swiftc -swift-version 5 -O \
     -target arm64-apple-macos12.0 \
     -framework Cocoa \
