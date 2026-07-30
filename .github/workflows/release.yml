@@ -41,11 +41,17 @@ jobs:
         id: signing
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           if [ -n "$MACOS_CERT_P12_BASE64" ]; then
             echo "has_cert=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_cert=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$MACOS_CERT_P12_BASE64" ] && [ -n "$NOTARY_PASSWORD" ]; then
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Import Developer ID certificate
@@ -80,8 +86,13 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: ./packaging/build_dmg.sh
 
+      # Only a fully notarized DMG may reach a release: an ad-hoc or merely
+      # signed CI build must never overwrite a notarized asset that was
+      # uploaded from a local release. (With notary secrets set, build_dmg.sh
+      # exits non-zero on a notarization failure, so reaching this step with
+      # notarized=true means the DMG really is notarized and stapled.)
       - name: Upload DMG to the release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.signing.outputs.notarized == 'true'
         # Third-party action pinned to a commit SHA (v2) — supply-chain hardening.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
