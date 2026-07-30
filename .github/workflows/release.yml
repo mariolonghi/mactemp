@@ -1,0 +1,97 @@
+name: Build & release DMG
+
+# Push a tag like v1.0.1 to build the .app, sign + notarize, package a .dmg,
+# and attach it to the matching GitHub Release.
+#
+# Signing/notarization runs only when the repository secrets below are set;
+# without them the build still produces an (ad-hoc, un-notarized) DMG.
+#
+#   Secrets required for a notarized build
+#   --------------------------------------
+#   MACOS_CERT_P12_BASE64   base64 of your exported "Developer ID Application" .p12
+#   MACOS_CERT_PASSWORD     the password you set when exporting that .p12
+#   NOTARY_APPLE_ID         your Apple ID email
+#   NOTARY_TEAM_ID          ZWXAL8XA46
+#   NOTARY_PASSWORD         an app-specific password (appleid.apple.com)
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:   # manual "Run workflow" — builds & notarizes without a release
+
+permissions:
+  contents: write
+
+# Auto-cancel a superseded run of the SAME ref (e.g. a re-pushed tag). Different
+# tags have different refs, so parallel releases aren't affected.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14   # Apple Silicon runner, ships with Xcode (notarytool)
+    steps:
+      - uses: actions/checkout@v4
+
+      # Secrets can't be referenced in `if:` directly; probe here with the env
+      # scoped to THIS step only, so the cert is never in the job-wide
+      # environment (i.e. not visible to third-party action steps).
+      - name: Check signing secrets
+        id: signing
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+        run: |
+          if [ -n "$MACOS_CERT_P12_BASE64" ]; then
+            echo "has_cert=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_cert=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.has_cert == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/developer_id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PW="$(openssl rand -hex 16)"
+
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PW" "$KEYCHAIN_PATH" >/dev/null
+          # Make our keychain the one codesign/find-identity search.
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          echo "Signing identities available:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build, sign, notarize & package DMG
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: ./packaging/build_dmg.sh
+
+      - name: Upload DMG to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        # Third-party action pinned to a commit SHA (v2) — supply-chain hardening.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: dist/*.dmg
+          fail_on_unmatched_files: true
+
+      - name: Upload DMG as a build artifact (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacTemp-dmg
+          path: dist/*.dmg
+          if-no-files-found: ignore

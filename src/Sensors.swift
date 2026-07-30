@@ -1,7 +1,5 @@
-import Cocoa
+import Foundation
 
-// MARK: - Thermal sensors
-//
 // Apple Silicon exposes its temperature sensors through the private
 // IOHIDEventSystem API. It needs no root and no entitlements, but the symbols
 // are not in any public header, so they are resolved with dlsym.
@@ -105,86 +103,3 @@ final class ThermalSensors {
         return values.reduce(0, +) / Double(values.count)
     }
 }
-
-// MARK: - Menu bar
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-
-    private let sensors = ThermalSensors()
-    private var statusItem: NSStatusItem!
-    private var timer: Timer?
-
-    private let cpuItem = NSMenuItem(title: "CPU  —", action: nil, keyEquivalent: "")
-    private let gpuItem = NSMenuItem(title: "GPU  —", action: nil, keyEquivalent: "")
-    private let socItem = NSMenuItem(title: "SoC  —", action: nil, keyEquivalent: "")
-    private let unitItem = NSMenuItem(title: "Show °F", action: #selector(toggleUnit), keyEquivalent: "")
-
-    private var fahrenheit = UserDefaults.standard.bool(forKey: "fahrenheit") {
-        didSet {
-            UserDefaults.standard.set(fahrenheit, forKey: "fahrenheit")
-            unitItem.state = fahrenheit ? .on : .off
-            refresh()
-        }
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-
-        let menu = NSMenu()
-        for item in [cpuItem, gpuItem, socItem] {
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        unitItem.target = self
-        unitItem.state = fahrenheit ? .on : .off
-        menu.addItem(unitItem)
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
-
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
-    }
-
-    @objc private func toggleUnit() {
-        fahrenheit.toggle()
-    }
-
-    private func refresh() {
-        guard let sensors else {
-            setTitle("n/a")
-            cpuItem.title = "Sensors unavailable"
-            gpuItem.isHidden = true
-            socItem.isHidden = true
-            return
-        }
-
-        let reading = sensors.read()
-        setTitle(reading.cpu.map(format) ?? "—")
-        cpuItem.title = "CPU  " + (reading.cpu.map(format) ?? "—")
-        gpuItem.title = "GPU  " + (reading.gpu.map(format) ?? "—")
-        socItem.title = "SoC  " + (reading.soc.map(format) ?? "—")
-    }
-
-    private func format(_ celsius: Double) -> String {
-        let value = fahrenheit ? celsius * 9 / 5 + 32 : celsius
-        return "\(Int(value.rounded()))°"
-    }
-
-    /// Monospaced digits keep the item from twitching as the reading changes.
-    private func setTitle(_ text: String) {
-        statusItem.button?.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)]
-        )
-    }
-}
-
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
