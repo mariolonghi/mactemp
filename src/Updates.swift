@@ -22,11 +22,12 @@ struct UpdateStatus {
 final class UpdateChecker {
     private let cacheTTL: TimeInterval = 600
     private var cached: (at: Date, status: UpdateStatus)?
-    private var inFlight = false
+    private var pending: [(UpdateStatus) -> Void] = []
     private let lock = NSLock()
 
     /// Runs the check off the main thread; `completion` is called on the main
-    /// queue. Coalesces concurrent calls and serves a fresh-enough cache.
+    /// queue. Concurrent calls coalesce into one request (every completion
+    /// still fires), and a fresh-enough cache is served without a request.
     func check(force: Bool = false, completion: @escaping (UpdateStatus) -> Void) {
         lock.lock()
         if !force, let cached, Date().timeIntervalSince(cached.at) < cacheTTL {
@@ -34,11 +35,11 @@ final class UpdateChecker {
             DispatchQueue.main.async { completion(cached.status) }
             return
         }
-        if inFlight {
+        pending.append(completion)
+        if pending.count > 1 {
             lock.unlock()
-            return   // a check is already running; menu will pick up its result
+            return   // a check is already running; it will call us back too
         }
-        inFlight = true
         lock.unlock()
 
         var request = URLRequest(url: AppInfo.latestReleaseAPI, timeoutInterval: 5)
@@ -47,13 +48,15 @@ final class UpdateChecker {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             let status = Self.parse(data: data, response: response, error: error)
+            var callbacks: [(UpdateStatus) -> Void] = []
             if let self {
                 self.lock.lock()
                 self.cached = (Date(), status)
-                self.inFlight = false
+                callbacks = self.pending
+                self.pending.removeAll()
                 self.lock.unlock()
             }
-            DispatchQueue.main.async { completion(status) }
+            DispatchQueue.main.async { callbacks.forEach { $0(status) } }
         }.resume()
     }
 
@@ -247,6 +250,7 @@ enum SelfUpdater {
         }
         let script = """
         #!/bin/bash
+        trap '' HUP   # keep running after the app that spawned us exits
         target=\(q(target.path))
         staged=\(q(staged.path))
         workdir=\(q(workdir.path))
