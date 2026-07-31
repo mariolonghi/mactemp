@@ -51,6 +51,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LoginItem.applyAtStartup()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // A chip symbol marks this as the COMPUTER's temperature — deliberately
+        // not a thermometer, so it can't be mistaken for a weather widget.
+        // Template rendering keeps it legible on light and dark menu bars.
+        if let button = statusItem.button,
+           let chip = NSImage(systemSymbolName: "cpu", accessibilityDescription: "CPU temperature")?
+               .withSymbolConfiguration(.init(pointSize: 12, weight: .regular)) {
+            chip.isTemplate = true
+            button.image = chip
+            button.imagePosition = .imageLeading
+        }
 
         let menu = NSMenu()
         menu.delegate = self
@@ -226,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func format(_ celsius: Double) -> String {
         let value = fahrenheit ? celsius * 9 / 5 + 32 : celsius
-        return "\(Int(value.rounded()))°"
+        return "\(Int(value.rounded()))°" + (fahrenheit ? "F" : "C")
     }
 
     /// Monospaced digits keep the item from twitching as the reading changes.
