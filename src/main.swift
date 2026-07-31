@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let cpuItem = NSMenuItem(title: "CPU  —", action: nil, keyEquivalent: "")
     private let gpuItem = NSMenuItem(title: "GPU  —", action: nil, keyEquivalent: "")
     private let socItem = NSMenuItem(title: "SoC  —", action: nil, keyEquivalent: "")
+    private let thermalItem = NSMenuItem(title: "Thermal  —", action: nil, keyEquivalent: "")
+    private var chipTemplate: NSImage?
+    private var thermalTint: NSColor?   // nil when nominal
     private let installItem = NSMenuItem(title: "", action: #selector(installUpdate), keyEquivalent: "")
     private let unitItem = NSMenuItem(title: "Show °F", action: #selector(toggleUnit), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
@@ -58,13 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            let chip = NSImage(systemSymbolName: "cpu", accessibilityDescription: "CPU temperature")?
                .withSymbolConfiguration(.init(pointSize: 12, weight: .regular)) {
             chip.isTemplate = true
+            chipTemplate = chip
             button.image = chip
             button.imagePosition = .imageLeading
         }
 
         let menu = NSMenu()
         menu.delegate = self
-        for item in [cpuItem, gpuItem, socItem] {
+        for item in [cpuItem, gpuItem, socItem, thermalItem] {
             item.isEnabled = false
             menu.addItem(item)
         }
@@ -85,6 +89,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
+        // Thermal pressure (Apple's own per-machine judgment, public API):
+        // tints the menu bar icon and fills the Thermal menu row. The
+        // notification makes colour changes instant; refresh() re-reads it on
+        // every tick anyway as a fallback.
+        NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            self?.applyThermalState()
+        }
+
         refresh()
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
@@ -92,6 +106,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // .common so readings keep updating while the menu is open.
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+    }
+
+    /// nominal → default monochrome; anything above tints the chip icon and
+    /// reading, so the menu bar only turns colourful when macOS is actually
+    /// under pressure. The status bar ignores contentTintColor on template
+    /// images, so tinting swaps in a pre-coloured (non-template) icon.
+    private func applyThermalState() {
+        let state = ProcessInfo.processInfo.thermalState
+        let (label, tint): (String, NSColor?)
+        switch state {
+        case .nominal: (label, tint) = ("Nominal", nil)
+        case .fair: (label, tint) = ("Fair", .systemYellow)
+        case .serious: (label, tint) = ("Serious", .systemOrange)
+        case .critical: (label, tint) = ("Critical", .systemRed)
+        @unknown default: (label, tint) = ("Unknown", nil)
+        }
+        thermalItem.title = "Thermal  \(label)"
+
+        guard tint !== thermalTint else { return }
+        thermalTint = tint
+        if let chip = chipTemplate {
+            if let tint {
+                let tinted = NSImage(size: chip.size, flipped: false) { rect in
+                    chip.draw(in: rect)
+                    tint.set()
+                    rect.fill(using: .sourceAtop)
+                    return true
+                }
+                statusItem.button?.image = tinted
+            } else {
+                statusItem.button?.image = chip
+            }
+        }
+        refresh()   // re-render the title in the new colour
     }
 
     private func makeItem(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -232,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cpuItem.title = "CPU  " + (reading.cpu.map(format) ?? "—")
         gpuItem.title = "GPU  " + (reading.gpu.map(format) ?? "—")
         socItem.title = "SoC  " + (reading.soc.map(format) ?? "—")
+        applyThermalState()
     }
 
     private func format(_ celsius: Double) -> String {
@@ -241,10 +290,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Monospaced digits keep the item from twitching as the reading changes.
     private func setTitle(_ text: String) {
-        statusItem.button?.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)]
-        )
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+        ]
+        if let thermalTint {
+            attributes[.foregroundColor] = thermalTint
+        }
+        statusItem.button?.attributedTitle = NSAttributedString(string: text, attributes: attributes)
     }
 }
 
